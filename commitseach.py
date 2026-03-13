@@ -1,53 +1,79 @@
 import requests
 import time
+from datetime import datetime, timedelta
 
+# --- CONFIG ---
 KEYWORDS = ["cagent", "refactor", "update", "optimize"]
-query = "(" + " OR ".join(KEYWORDS) + ") in:message"
+OUTPUT_FILE = "yaml_commit_results.txt"
+START_DATE = "2025-01-01"   # inclusive
+END_DATE   = "2025-03-01"   # exclusive
+DATE_WINDOW_DAYS = 7        # split search into 7-day chunks
+GITHUB_TOKEN = ""           # optional, increases rate limit
 
-search_url = "https://api.github.com/search/commits"
-
-headers = {
-    "Accept": "application/vnd.github.cloak-preview"
+# Headers for commit search API
+HEADERS = {
+    "Accept": "application/vnd.github.cloak-preview",
 }
+if GITHUB_TOKEN:
+    HEADERS["Authorization"] = f"token {GITHUB_TOKEN}"
 
-params = {
-    "q": query,
-    "per_page": 1000,
-    "page": 1
-}
+# --- FUNCTIONS ---
+def daterange(start, end, delta_days):
+    current = start
+    while current < end:
+        next_date = min(current + timedelta(days=delta_days), end)
+        yield current, next_date
+        current = next_date
 
-output_file = "yaml_commit_results.txt"
+def build_query(keywords, start_date, end_date):
+    kw_part = "(" + " OR ".join(keywords) + ")"
+    date_part = f"committer-date:{start_date}..{end_date}"
+    return f"{kw_part} in:message {date_part}"
 
-with open(output_file, "w", encoding="utf-8") as f:
+# --- MAIN ---
+start_dt = datetime.strptime(START_DATE, "%Y-%m-%d")
+end_dt = datetime.strptime(END_DATE, "%Y-%m-%d")
 
-    search_resp = requests.get(search_url, headers=headers, params=params)
-    search_data = search_resp.json()
+with open(OUTPUT_FILE, "a", encoding="utf-8") as f:
 
-    for item in search_data.get("items", []):
+    for window_start, window_end in daterange(start_dt, end_dt, DATE_WINDOW_DAYS):
 
-        commit_url = item["url"]
-        commit_resp = requests.get(commit_url)
-        commit_data = commit_resp.json()
+        start_str = window_start.strftime("%Y-%m-%d")
+        end_str   = window_end.strftime("%Y-%m-%d")
+        query = build_query(KEYWORDS, start_str, end_str)
 
-        files = commit_data.get("files", [])
+        print(f"\nSearching {start_str} → {end_str}")
 
-        yaml_files = [
-            file["filename"]
-            for file in files
-            if file["filename"].endswith((".yaml", ".yml"))
-        ]
+        for page in range(1, 11):  # pages 1–10, 100 per page max
+            params = {"q": query, "per_page": 100, "page": page}
 
-        if yaml_files:
+            resp = requests.get("https://api.github.com/search/commits", headers=HEADERS, params=params)
+            if resp.status_code != 200:
+                print("Error:", resp.status_code, resp.text)
+                break
 
-            message = commit_data["commit"]["message"]
-            html_url = commit_data["html_url"]
+            data = resp.json()
+            items = data.get("items", [])
 
-            matches = sum(k in message.lower() for k in KEYWORDS)
+            if not items:
+                break
 
-            f.write(f"Matches: {matches}\n")
-            f.write(f"Commit: {html_url}\n")
-            f.write(f"YAML files: {', '.join(yaml_files)}\n")
-            f.write(f"Message: {message}\n")
-            f.write("-"*60 + "\n")
+            print(f" Page {page}, {len(items)} commits")
 
-        time.sleep(0.5)
+            for item in items:
+                commit_url = item["url"]
+                commit_resp = requests.get(commit_url, headers=HEADERS)
+                commit_data = commit_resp.json()
+
+                files = commit_data.get("files", [])
+                yaml_files = [f["filename"] for f in files if f["filename"].endswith((".yaml", ".yml"))]
+
+                if yaml_files:
+                    html_url = commit_data["html_url"]
+                    f.write(f"{html_url}\n")
+                    f.flush()
+                    print(" Saved:", html_url)
+
+                time.sleep(0.2)  # avoid hitting rate limit
+
+            time.sleep(1)
