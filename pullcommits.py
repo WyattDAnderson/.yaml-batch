@@ -70,7 +70,6 @@ def download_yaml_file(file_info, repo_full_name, sha):
     if r.status_code != 200:
         return
 
-    # Create structured path:
     # downloaded_yaml/{repo}/{sha}/path/to/file.yaml
     save_path = OUTPUT_DIR / repo_full_name / sha / filename
     save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -97,7 +96,7 @@ def main():
             if filename.endswith(".yaml") or filename.endswith(".yml"):
                 download_yaml_file(file_info, repo_name, sha)
 
-        time.sleep(0.5)  # be nice to API
+        time.sleep(0.5) 
 
 if __name__ == "__main__":
     main()
